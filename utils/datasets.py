@@ -6,14 +6,38 @@ import torch
 import torchvision
 import torchvision.transforms as transforms
 from torchvision.datasets.folder import IMG_EXTENSIONS, pil_loader
-
+from PIL import Image
 from . import video_transforms
-from .util import center_crop_arr
+import chardet
 
 import json
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 import ipdb
+
+
+def detect_encoding(file_path):
+    with open(file_path,'rb') as f:
+        raw_data = f.read()
+    result = chardet.detect(raw_data)
+    return result['encoding']
+
+
+def center_crop_arr(pil_image, image_size):
+    """
+    Center cropping implementation from ADM.
+    https://github.com/openai/guided-diffusion/blob/8fb3ad9197f16bbc40620447b2742e13458d2831/guided_diffusion/image_datasets.py#L126
+    """
+    while min(*pil_image.size) >= 2 * image_size:
+        pil_image = pil_image.resize(tuple(x // 2 for x in pil_image.size), resample=Image.BOX)
+
+    scale = image_size / min(*pil_image.size)
+    pil_image = pil_image.resize(tuple(round(x * scale) for x in pil_image.size), resample=Image.BICUBIC)
+
+    arr = np.array(pil_image)
+    crop_y = (arr.shape[0] - image_size) // 2
+    crop_x = (arr.shape[1] - image_size) // 2
+    return Image.fromarray(arr[crop_y : crop_y + image_size, crop_x : crop_x + image_size])
 
 
 def get_transforms_video(resolution=256):
@@ -56,18 +80,31 @@ class DatasetFromCSV(torch.utils.data.Dataset):
             frame_interval=1,
             transform=None,
             root=None,
+            max_samples=None,
     ):
         video_samples = []
 
-        with open(csv_path, "r") as f:
+        encoding = detect_encoding(csv_path)
+        print(f"Detected encoding:{encoding}")
+
+        with open(csv_path, "r", encoding=encoding) as f:
             reader = csv.reader(f)
             csv_list = list(reader)
+            # print(f"CSV Head: {csv_list[:5]}")  # 打印前5行
+
+        if max_samples is not None:
+            csv_list = csv_list[1:max_samples + 1]
+        else:
+            csv_list = csv_list[1:]
+
         for vid in csv_list[1:]:  # no csv head
             vid_name = vid[0]
             vid_path = os.path.join(root, vid_name)
+
             vid_caption = vid[1]
             if os.path.exists(vid_path):
                 video_samples.append([vid_path, vid_caption])
+
         self.samples = video_samples
 
         self.is_video = True
@@ -89,7 +126,6 @@ class DatasetFromCSV(torch.utils.data.Dataset):
                 total_frames = len(vframes)
             else:
                 total_frames = 0
-
             loop_index = index
             while (total_frames < self.num_frames or is_exit == False):
                 loop_index += 1
@@ -141,8 +177,10 @@ class DatasetFromCSV(torch.utils.data.Dataset):
 
 
 if __name__ == '__main__':
-    data_path = ''
-    root = ''
+    data_path = r'/projectnb/ec720prj/DenseCap/vaex/OpenVid/OpenVid-1M-108part.csv'
+    root = r'/projectnb/ec720prj/DenseCap/vaex/OpenVid/video'
+    # data_path = r'D:\VideoVAR\OpenVid_part108\data\train\OpenVid-1M-108part.csv'
+    # root = r'D:\VideoVAR\OpenVid_part108\video'
     dataset = DatasetFromCSV(
         data_path,
         transform=get_transforms_video(),
@@ -150,6 +188,7 @@ if __name__ == '__main__':
         frame_interval=3,
         root=root,
     )
+
     sampler = DistributedSampler(
         dataset,
         num_replicas=1,
@@ -166,5 +205,19 @@ if __name__ == '__main__':
         pin_memory=True,
         drop_last=True
     )
-    for video_data in loader:
-        print(video_data)
+    # for video_data in loader:
+    #     print(video_data)
+
+    # for i, video_data in enumerate(loader):
+    #     if i >= 5:
+    #         break
+    #     print(f"Data {i + 1}:")
+    #     for key, value in video_data.items():
+    #         if isinstance(value, torch.Tensor):
+    #             print(f"  {key}: {value.shape}")
+    #         elif isinstance(value, list):
+    #             print(f"  {key}: list of length {len(value)}")
+    #         elif isinstance(value, str):
+    #             print(f"  {key}: {value}")
+    #         else:
+    #             print(f"  {key}: {type(value)}")
