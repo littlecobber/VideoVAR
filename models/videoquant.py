@@ -61,7 +61,7 @@ class VectorQuantizer3(nn.Module):
         return f'beta={self.beta:g}'
     
     # ===================== `forward` is only used in VAE training =====================
-    def forward(self, f_BCTHW: torch.Tensor, ret_usages=False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, List[float]]:
+    def forward(self, f_BCTHW: torch.Tensor, ret_usages=True) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, List[float]]:
         f_BCTHW = f_BCTHW.float()
         B, C, T, H, W = f_BCTHW.shape
         # find the nearest embedding
@@ -82,8 +82,13 @@ class VectorQuantizer3(nn.Module):
         fhat_BCTHW = self.quant_resi(self.embedding(idx_BTHW).permute(0, 4, 1, 2, 3).contiguous())
         
         # calc loss
-        vq_loss = F.mse_loss(fhat_BCTHW.detach(), f_BCTHW).mul_(self.beta) + F.mse_loss(fhat_BCTHW, f_BCTHW.detach())
-        
+        beta_tensor = torch.tensor(self.beta, dtype=torch.float32, device=f_BCTHW.device)
+        vq_loss = F.mse_loss(fhat_BCTHW.detach(), f_BCTHW).mul_(beta_tensor) + F.mse_loss(fhat_BCTHW, f_BCTHW.detach())
+
+        # Debug commit_loss
+        commit_loss = F.mse_loss(fhat_BCTHW.detach(), f_BCTHW).mul_(beta_tensor)
+        print("commit_loss in the forward of videoquant.py:", commit_loss)
+
         # VQVAE: straight through gradient estimation, copy the gradient on fhat_BCTHW to f_BCTHW
         fhat_BCTHW = (fhat_BCTHW.detach() - f_BCTHW.detach()).add_(f_BCTHW)
         
@@ -97,8 +102,8 @@ class VectorQuantizer3(nn.Module):
         else: self.vocab_usage.mul_(0.99).add_(prob_per_class_is_chosen, alpha=0.01)
         self.vocab_usage_record_times += 1
         
-        entropy_loss = 0.0 # todo: not implemented yet
-        return fhat_BCTHW, vq_loss, entropy_loss, (vocab_usage if ret_usages else None)
+        # entropy_loss = 0.0 # todo: not implemented yet
+        return fhat_BCTHW, vq_loss, (vocab_usage if ret_usages else None)
     # ===================== `forward` is only used in VAE training =====================
     
     def f_to_idx(self, f_BCTHW: torch.Tensor) -> torch.LongTensor:
